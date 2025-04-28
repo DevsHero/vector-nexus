@@ -3,9 +3,14 @@ name = "vector-nexus"
 version = "0.1.0"
 edition = "2021"
 description = "Abstraction layer for multiple vector databases with schema generation and RAG support."
-license = "MIT OR Apache-2.0" 
+license = "MIT"
 repository = "https://github.com/DevsHero/vector-nexus.git" 
 readme = "README.md" 
+authors = ["Thanon Aphithanawat"]
+keywords = ["vector-database", "rag", "embedding", "vector-search", "database-abstraction"]
+categories = ["database", "database-implementations", "api-bindings", "asynchronous"]
+documentation = "https://github.com/DevsHero/vector-nexus"
+homepage = "https://github.com/DevsHero/vector-nexus"
 
 [dependencies]
 tokio = { version = "1", features = ["rt-multi-thread", "macros"] } 
