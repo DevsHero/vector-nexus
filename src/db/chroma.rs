@@ -36,8 +36,8 @@ struct QueryEmbeddingsResponse {
     ids: Option<Vec<Vec<String>>>,
     distances: Option<Vec<Vec<f32>>>,
     metadatas: Option<Vec<Vec<Option<Value>>>>,
-    documents: Option<Vec<Vec<Option<String>>>>,
-    embeddings: Option<Value>,
+    _documents: Option<Vec<Vec<Option<String>>>>,
+    _embeddings: Option<Value>,
     error: Option<String>,
 }
 
