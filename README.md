@@ -1,5 +1,8 @@
 # Vector Nexus  
 Vector Nexus provides a unified trait (`VectorStore`) and schema definition (`IndexSchema`) for interacting with various vector databases in Rust. It aims to abstract the specific implementation details of different vector stores, allowing you to switch between them more easily in your applications (like RAG engines).
+## Integration with `db2vec`
+
+Vector Nexus is designed to work seamlessly with data prepared and exported using tools like [`db2vec`](https://github.com/DevsHero/db2vec).
 ## Auto-Schema Generation for Vector Databases
 
 A key feature facilitated by the `VectorStore` trait is **Auto-Schema Generation**. This addresses the challenge of keeping the application's understanding of the database structure synchronized with the actual database.
@@ -35,9 +38,7 @@ async fn generate_schema(
     *   `prefix`: A string prefix often used for namespacing keys (e.g., `surreal:profile`).
     *   `fields`: A list of field names within the index that are relevant for searching or filtering (excluding `id` and `vector`).
 
-## Integration with `db2vec`
 
-Vector Nexus is designed to work seamlessly with data prepared and exported using tools like [`db2vec`](https://github.com/DevsHero/db2vec).
 
 1.  **Export Data:** Use `db2vec` to export data from your source database (e.g., PostgreSQL, MySQL) into a suitable format (like JSON Lines), potentially including pre-computed vector embeddings for relevant text fields.
 2.  **Load Data:** Load the exported data from `db2vec` into your chosen vector database (e.g., SurrealDB, Qdrant, Redis with vector search module). Ensure the table/collection names and field names match your intended structure.
