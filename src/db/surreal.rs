@@ -375,21 +375,37 @@ impl SurrealVectorStore {
         query_vec: &[f32],
         limit: usize,
         topic: &str,
-        _schema_fields: Option<&Vec<String>>
+        schema_fields: Option<&Vec<String>>
     ) -> Result<Vec<(f32, String, Value)>, Box<dyn Error + Send + Sync>> {
         let query_vec_json = serde_json::to_string(query_vec)?;
+
+        let select_fields = match schema_fields {
+            Some(fields) if !fields.is_empty() => {
+                fields
+                    .iter()
+                    .map(|f| format!("`{}`", f))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+            _ => {
+                warn!("No specific fields requested for SurrealDB search on topic '{}', selecting all (*).", topic);
+                "*".to_string()
+            }
+        };
+
         let query = format!(
             r#"
             SELECT
                 id,
                 vector::similarity::cosine(vector, <vector>{}) AS score,
-                *
+                {}
             FROM {}
             WHERE vector @@ <vector>{}
             ORDER BY score DESC
             LIMIT {};
             "#,
             query_vec_json,
+            select_fields,
             topic,
             query_vec_json,
             limit
@@ -424,6 +440,12 @@ impl SurrealVectorStore {
                                     clean_item.insert(key.clone(), value.clone());
                                 }
                             }
+                            if let Some(fields_to_keep) = schema_fields {
+                                if !fields_to_keep.is_empty() {
+                                    clean_item.retain(|k, _| fields_to_keep.contains(k));
+                                }
+                            }
+
                             search_results.push((score, id, Value::Object(clean_item)));
                         }
                     }
@@ -444,7 +466,7 @@ impl SurrealVectorStore {
         text_query: &str,
         query_vec: &[f32],
         limit: usize,
-        _schema_fields: Option<&Vec<String>>
+        schema_fields: Option<&Vec<String>>
     ) -> Result<Vec<(f32, String, Value)>, Box<dyn Error + Send + Sync>> {
         info!(
             "Performing SurrealDB hybrid search (vector + text) for query '{}' on topic '{}'",
@@ -455,18 +477,33 @@ impl SurrealVectorStore {
         let query_vec_json = serde_json::to_string(query_vec)?;
         let escaped_text_query = text_query;
 
+        let select_fields = match schema_fields {
+            Some(fields) if !fields.is_empty() => {
+                fields
+                    .iter()
+                    .map(|f| format!("`{}`", f))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            }
+            _ => {
+                warn!("No specific fields requested for SurrealDB hybrid search on topic '{}', selecting all (*).", topic);
+                "*".to_string()
+            }
+        };
+
         let query = format!(
             r#"
             SELECT
                 id,
                 vector::similarity::cosine(vector, <vector>{}) AS score,
-                *
+                {}
             FROM {}
             WHERE content @@ '{}' AND vector @@ <vector>{}
             ORDER BY score DESC
             LIMIT {};
             "#,
             query_vec_json,
+            select_fields,
             topic,
             escaped_text_query,
             query_vec_json,
@@ -502,6 +539,12 @@ impl SurrealVectorStore {
                                     clean_item.insert(key.clone(), value.clone());
                                 }
                             }
+                            if let Some(fields_to_keep) = schema_fields {
+                                if !fields_to_keep.is_empty() {
+                                    clean_item.retain(|k, _| fields_to_keep.contains(k));
+                                }
+                            }
+
                             search_results.push((score, id, Value::Object(clean_item)));
                         }
                     }

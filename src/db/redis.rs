@@ -52,6 +52,18 @@ impl RedisVectorStore {
         }
         Ok(all_keys)
     }
+
+    fn normalize_index_name(topic: &str) -> String {
+        if topic.starts_with("idx:") {
+            topic.to_string()
+        } else if let Some(n) = topic.strip_prefix("redis:") {
+            format!("idx:{}", n)
+        } else if let Some(n) = topic.strip_prefix("qdrant:") {
+            format!("idx:{}", n)
+        } else {
+            format!("idx:{}", topic)
+        }
+    }
 }
 
 #[async_trait]
@@ -61,18 +73,23 @@ impl VectorStore for RedisVectorStore {
         query_vec: &[f32],
         limit: usize,
         topic: &str,
-        _schema_fields: Option<&Vec<String>>
+        schema_fields: Option<&Vec<String>>
     ) -> Result<Vec<(f32, String, Value)>, Box<dyn Error + Send + Sync>> {
         let mut con = self.get_connection().await?;
-        let index_name = format!("idx:{}", topic);
-        debug!("Redis vector search on index '{}' with limit {}", index_name, limit);
+        let index_name = Self::normalize_index_name(topic);
+        debug!(
+            "Redis vector search on index '{}' with limit {}. Requesting fields: {:?}",
+            index_name,
+            limit,
+            schema_fields.unwrap_or(&Vec::new())
+        );
 
         let query_blob: Vec<u8> = query_vec
             .iter()
             .flat_map(|f| f.to_le_bytes())
             .collect();
 
-        let query_str = format!("*=>[KNN {} @vector $query_blob AS vector_score]", limit);
+        let query_str = format!("*=>[KNN {} @vector $vec AS vector_score]", limit);
 
         let mut ft_cmd = cmd("FT.SEARCH");
         ft_cmd
@@ -93,7 +110,7 @@ impl VectorStore for RedisVectorStore {
         let redis_result: RedisValue = ft_cmd.query_async(&mut con).await?;
         debug!("Raw FT.SEARCH Result for index {}: {:?}", index_name, redis_result);
 
-        let results = parse_ft_search_results(redis_result).await;
+        let results = parse_ft_search_results(redis_result, schema_fields).await;
         debug!("Parsed {} results from Redis vector search.", results.len());
         Ok(results)
     }
@@ -104,15 +121,16 @@ impl VectorStore for RedisVectorStore {
         text_query: &str,
         query_vec: &[f32],
         limit: usize,
-        _schema_fields: Option<&Vec<String>>
+        schema_fields: Option<&Vec<String>>
     ) -> Result<Vec<(f32, String, serde_json::Value)>, Box<dyn Error + Send + Sync>> {
         let mut conn = self.get_connection().await?;
-        let index_name = format!("idx:{}", topic);
+        let index_name = Self::normalize_index_name(topic);
         debug!(
-            "Redis hybrid search on index '{}' with limit {}, text query: '{}'",
+            "Redis hybrid search (using vector only) on index '{}' with limit {}, text query ignored: '{}'. Requesting fields: {:?}",
             index_name,
             limit,
-            text_query
+            text_query,
+            schema_fields.unwrap_or(&Vec::new())
         );
 
         let query_blob: Vec<u8> = query_vec
@@ -120,14 +138,9 @@ impl VectorStore for RedisVectorStore {
             .flat_map(|f| f.to_le_bytes())
             .collect();
 
-        let escaped_text_query = text_query.replace('-', "\\-");
-        let query_str = format!(
-            "({})=>[KNN {} @vector $vec AS vector_score]",
-            escaped_text_query,
-            limit * 2
-        );
+        let query_str = format!("*=>[KNN {} @vector $vec AS vector_score]", limit);
 
-        debug!("DEBUG: Hybrid query: {}", query_str);
+        debug!("DEBUG: Hybrid query (using vector only): {}", query_str);
 
         let mut ft_cmd = cmd("FT.SEARCH");
         ft_cmd
@@ -139,9 +152,6 @@ impl VectorStore for RedisVectorStore {
             .arg(&query_blob)
             .arg("DIALECT")
             .arg("2")
-            .arg("LIMIT")
-            .arg("0")
-            .arg(limit.to_string())
             .arg("RETURN")
             .arg("3")
             .arg("vector_score")
@@ -149,16 +159,20 @@ impl VectorStore for RedisVectorStore {
             .arg("$");
 
         let redis_result: RedisValue = ft_cmd.query_async(&mut conn).await?;
-        debug!("Raw FT.SEARCH Hybrid Result for index {}: {:?}", index_name, redis_result);
+        debug!(
+            "Raw FT.SEARCH Hybrid (Vector Only) Result for index {}: {:?}",
+            index_name,
+            redis_result
+        );
 
-        let results = parse_ft_search_results(redis_result).await;
-        debug!("Parsed {} results from Redis hybrid search.", results.len());
+        let results = parse_ft_search_results(redis_result, schema_fields).await;
+        debug!("Parsed {} results from Redis hybrid (vector only) search.", results.len());
         Ok(results)
     }
 
     async fn count_documents(&self, topic: &str) -> Result<usize, Box<dyn Error + Send + Sync>> {
         let mut con = self.get_connection().await?;
-        let index_name = format!("idx:{}", topic);
+        let index_name = Self::normalize_index_name(topic);
         debug!("Counting documents in Redis index '{}'", index_name);
 
         let mut ft = cmd("FT.SEARCH");
@@ -285,7 +299,10 @@ impl VectorStore for RedisVectorStore {
     }
 }
 
-async fn parse_ft_search_results(raw: RedisValue) -> Vec<(f32, String, serde_json::Value)> {
+async fn parse_ft_search_results(
+    raw: RedisValue,
+    schema_fields: Option<&Vec<String>>
+) -> Vec<(f32, String, serde_json::Value)> {
     let mut out = Vec::new();
     if let RedisValue::Bulk(mut arr) = raw {
         if arr.is_empty() {
@@ -354,7 +371,17 @@ async fn parse_ft_search_results(raw: RedisValue) -> Vec<(f32, String, serde_jso
                     if let Ok(json_str) = String::from_redis_value(doc_val) {
                         match serde_json::from_str::<Value>(&json_str) {
                             Ok(parsed_doc) => {
-                                doc = Some(parsed_doc);
+                                if
+                                    let (Some(fields_to_keep), Value::Object(mut obj)) = (
+                                        schema_fields,
+                                        parsed_doc.clone(),
+                                    )
+                                {
+                                    obj.retain(|k, _| fields_to_keep.contains(k));
+                                    doc = Some(Value::Object(obj));
+                                } else {
+                                    doc = Some(parsed_doc);
+                                }
                             }
                             Err(e) => error!("Failed to parse document JSON for ID {}: {}", id, e),
                         }

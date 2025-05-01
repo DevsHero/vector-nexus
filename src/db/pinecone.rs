@@ -251,17 +251,18 @@ impl VectorStore for PineconeVectorStore {
         query_vec: &[f32],
         limit: usize,
         topic: &str,
-        _schema_fields: Option<&Vec<String>>
+        schema_fields: Option<&Vec<String>>
     ) -> Result<Vec<(f32, String, Value)>, Box<dyn Error + Send + Sync>> {
         let namespace = if topic.is_empty() { "" } else { topic };
         debug!(
-            "Pinecone vector search in namespace '{}' with limit {}",
+            "Pinecone vector search in namespace '{}' with limit {}. Requesting fields: {:?}",
             if namespace.is_empty() {
                 "<default>"
             } else {
                 namespace
             },
-            limit
+            limit,
+            schema_fields.unwrap_or(&Vec::new())
         );
 
         let url = format!("{}/query", self.data_plane_url);
@@ -272,7 +273,7 @@ impl VectorStore for PineconeVectorStore {
             "vector": query_vec,
             "topK": limit,
             "includeValues": false,
-            "includeMetadata": true
+            "includeMetadata": true 
         });
 
         let req_builder = self.client
@@ -297,7 +298,21 @@ impl VectorStore for PineconeVectorStore {
                         .filter_map(|m| {
                             let id = m.get("id").and_then(Value::as_str)?.to_string();
                             let score = m.get("score").and_then(Value::as_f64)? as f32;
-                            let metadata = Self::parse_metadata(m.get("metadata"));
+                            let mut metadata = Self::parse_metadata(m.get("metadata"));
+
+                            if
+                                let (Some(fields_to_keep), Value::Object(obj)) = (
+                                    schema_fields,
+                                    &mut metadata,
+                                )
+                            {
+                                if !fields_to_keep.is_empty() {
+                                    obj.retain(|k, _| fields_to_keep.contains(k));
+                                }
+                            } else if schema_fields.map_or(false, |f| f.is_empty()) {
+                                metadata = Value::Object(Default::default());
+                            }
+
                             Some((score, id, metadata))
                         })
                         .collect()
@@ -320,18 +335,19 @@ impl VectorStore for PineconeVectorStore {
         text_query: &str,
         query_vec: &[f32],
         limit: usize,
-        _schema_fields: Option<&Vec<String>>
+        schema_fields: Option<&Vec<String>>
     ) -> Result<Vec<(f32, String, Value)>, Box<dyn Error + Send + Sync>> {
         let namespace = if topic.is_empty() { "" } else { topic };
         debug!(
-            "Pinecone hybrid search (vector + filter) in namespace '{}' with limit {} and filter '{}'",
+            "Pinecone hybrid search (vector + filter) in namespace '{}' with limit {} and filter '{}'. Requesting fields: {:?}",
             if namespace.is_empty() {
                 "<default>"
             } else {
                 namespace
             },
             limit,
-            text_query
+            text_query,
+            schema_fields.unwrap_or(&Vec::new())
         );
 
         let url = format!("{}/query", self.data_plane_url);
@@ -386,7 +402,20 @@ impl VectorStore for PineconeVectorStore {
                         .filter_map(|m| {
                             let id = m.get("id").and_then(Value::as_str)?.to_string();
                             let score = m.get("score").and_then(Value::as_f64)? as f32;
-                            let metadata = Self::parse_metadata(m.get("metadata"));
+                            let mut metadata = Self::parse_metadata(m.get("metadata"));
+                            if
+                                let (Some(fields_to_keep), Value::Object(obj)) = (
+                                    schema_fields,
+                                    &mut metadata,
+                                )
+                            {
+                                if !fields_to_keep.is_empty() {
+                                    obj.retain(|k, _| fields_to_keep.contains(k));
+                                }
+                            } else if schema_fields.map_or(false, |f| f.is_empty()) {
+                                metadata = Value::Object(Default::default());
+                            }
+
                             Some((score, id, metadata))
                         })
                         .collect()
